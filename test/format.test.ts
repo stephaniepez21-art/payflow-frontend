@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   DECIMALS,
+  FEE_RESERVE,
   formatAmount,
   formatPeriod,
   formatWhen,
   fromStroops,
+  maxDeposit,
+  minAccountBalance,
   shortAddress,
   toStroops,
   XLM,
@@ -161,6 +164,53 @@ describe("formatAmount", () => {
     expect(formatAmount("1500000", { symbol: "USDC", decimals: 6 })).toBe("1.5 USDC");
     expect(formatAmount("1500000")).toBe("0.15 XLM");
     expect(formatAmount(0n, { symbol: "USDC", decimals: 6 })).toBe("0 USDC");
+  });
+});
+
+describe("maxDeposit", () => {
+  it("holds back the minimum account balance and the fee reserve", () => {
+    // 100 XLM held and nothing else on the account: 1 XLM minimum + 1 XLM fee.
+    expect(FEE_RESERVE).toBe(10_000_000n);
+    expect(maxDeposit(1_000_000_000n, 0)).toBe(980_000_000n);
+  });
+
+  it("counts every ledger entry against the reserve", () => {
+    // Each extra entry is another 0.5 XLM the network will not let go of.
+    expect(maxDeposit(1_000_000_000n, 4)).toBe(960_000_000n);
+  });
+
+  it("never returns an amount that would fail for lack of reserve", () => {
+    // Too small to cover the reserve at all: the button must be disabled
+    // rather than fill in an amount the contract would reject.
+    expect(maxDeposit(10_500_000n, 0)).toBe(0n);
+    expect(maxDeposit(2_000_000n, 0)).toBe(0n);
+    expect(maxDeposit(0n, 0)).toBe(0n);
+  });
+
+  it("stays exactly on the boundary", () => {
+    // 1 XLM minimum + 1 XLM fee exactly: nothing left, but never negative.
+    expect(maxDeposit(20_000_000n, 0)).toBe(0n);
+    expect(maxDeposit(20_000_001n, 0)).toBe(1n);
+  });
+
+  it("never leaves the account unable to pay for the transaction", () => {
+    // The invariant behind the whole thing: whatever Max fills, what is left
+    // covers the minimum balance and the fee — unless the account could not
+    // cover them to begin with, in which case Max must fill nothing at all.
+    for (const balance of [0n, 1n, 9_999_999n, 20_000_000n, 123_456_789n, 10n ** 18n]) {
+      for (const subentries of [0, 1, 17]) {
+        const left = balance - maxDeposit(balance, subentries);
+        const floor = minAccountBalance(subentries) + FEE_RESERVE;
+        expect(left, `left after Max of ${balance}/${subentries}`).toBeGreaterThanOrEqual(
+          left < floor ? balance : floor,
+        );
+      }
+    }
+  });
+
+  it("accepts a custom reserve", () => {
+    expect(maxDeposit(100_000_000_000n, 0, 0n)).toBe(99_990_000_000n);
+    expect(maxDeposit(100_000_000_000n, 0, 200_000_000_000n)).toBe(0n);
   });
 });
 

@@ -115,6 +115,36 @@ export function spendableBalance(
   return spendable > 0n ? spendable : 0n;
 }
 
+/**
+ * Headroom a "Max" fill leaves behind, on top of the minimum account balance.
+ *
+ * A deposit is one Soroban write paid for out of the same balance it is
+ * drawn from. The base fee is 100 stroops, but the rent the network charges
+ * for the ledger entries the write creates is the larger part, and that rent
+ * is set by the ledger, not by us. 1 XLM is a deliberate over-estimate of both:
+ * under-filling Max costs the user a fraction of an XLM, whereas over-filling
+ * it can drop the account below its minimum balance — which the network
+ * refuses, and which takes every mandate on the account with it.
+ */
+export const FEE_RESERVE = 10_000_000n;
+
+/**
+ * The most that can be deposited in one transaction without endangering the
+ * account: its spendable balance less the fee reserve.
+ *
+ * Returns 0 rather than a negative bigint when the balance is too small to
+ * cover the reserve, so callers can disable the button instead of rendering an
+ * amount the contract would reject.
+ */
+export function maxDeposit(
+  balance: bigint,
+  subentryCount: number,
+  feeReserve: bigint = FEE_RESERVE,
+): bigint {
+  const usable = spendableBalance(balance, subentryCount) - feeReserve;
+  return usable > 0n ? usable : 0n;
+}
+
 const PERIODS: Array<[string, number]> = [
   ["minute", 60],
   ["hour", 3_600],

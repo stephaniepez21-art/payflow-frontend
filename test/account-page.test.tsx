@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AccountPage from "@/app/account/page";
 import type { ApiMandate } from "@/lib/api";
 
@@ -17,8 +17,16 @@ const wallet = vi.hoisted(() => ({
   error: null as string | null,
   networkMismatch: false,
   walletNetwork: null as string | null,
+  account: { state: "loading" } as
+    | { state: "loading" }
+    | { state: "loaded"; account: { balance: bigint; subentryCount: number } }
+    | { state: "missing" }
+    | { state: "error"; message: string },
+  funding: false,
   connect: vi.fn(),
   disconnect: vi.fn(),
+  refreshAccount: vi.fn(),
+  fund: vi.fn(),
   signXdr: vi.fn(),
 }));
 
@@ -92,6 +100,10 @@ beforeEach(async () => {
   wallet.error = null;
   wallet.networkMismatch = false;
   wallet.walletNetwork = null;
+  wallet.funding = false;
+  wallet.account = { state: "loading" };
+  wallet.refreshAccount.mockClear();
+  wallet.fund.mockClear();
   apiMock.mandatesOf.mockReset();
   payflowMock.vaultBalance.mockReset();
   payflowMock.deposit.mockReset();
@@ -209,5 +221,106 @@ describe("AccountPage", () => {
 
     // Degrades to the native assumption rather than blanking the page.
     expect(await screen.findByText("5 XLM")).toBeTruthy();
+  });
+});
+
+describe("AccountPage deposit form", () => {
+  beforeEach(() => {
+    payflowMock.vaultBalance.mockResolvedValue(0n);
+    apiMock.mandatesOf.mockResolvedValue({ mandates: [] });
+    wallet.account = {
+      state: "loaded",
+      account: { balance: 100_000_000_000n, subentryCount: 0 },
+    };
+  });
+
+  it("shows the wallet's spendable balance next to the field", async () => {
+    render(<AccountPage />);
+
+    // 10,000 XLM held, less the 1 XLM the account must keep.
+    expect(await screen.findByText("Wallet: 9999 XLM")).toBeTruthy();
+  });
+
+  it("fills the field with the balance less the reserve", async () => {
+    render(<AccountPage />);
+    await screen.findByText("Wallet: 9999 XLM");
+
+    fireEvent.click(screen.getByRole("button", { name: "Max" }));
+
+    // 10,000 held − 1 minimum − 1 fee reserve.
+    expect((screen.getByLabelText(/^Amount/) as HTMLInputElement).value).toBe("9998");
+  });
+
+  it("documents the reserve on the button", async () => {
+    render(<AccountPage />);
+    await screen.findByText("Wallet: 9999 XLM");
+
+    expect(screen.getByRole("button", { name: "Max" }).getAttribute("title")).toMatch(
+      /minimum account balance and a 1 XLM reserve/,
+    );
+  });
+
+  it("deposits exactly what Max filled", async () => {
+    render(<AccountPage />);
+    await screen.findByText("Wallet: 9999 XLM");
+    fireEvent.click(screen.getByRole("button", { name: "Max" }));
+    payflowMock.deposit.mockResolvedValue("deadbeef");
+
+    fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+
+    // Sign and submit are async, so the call lands a tick later.
+    await waitFor(() =>
+      expect(payflowMock.deposit).toHaveBeenCalledWith(
+        SUBSCRIBER,
+        expect.any(Function),
+        expect.any(String),
+        99_980_000_000n,
+      ),
+    );
+  });
+
+  it("disables Max when the balance cannot cover the reserve", async () => {
+    // Under 1 XLM minimum + 1 XLM fee: filling Max would fail on the fee.
+    wallet.account = {
+      state: "loaded",
+      account: { balance: 15_000_000n, subentryCount: 0 },
+    };
+
+    render(<AccountPage />);
+    await screen.findByText("Wallet: 0.5 XLM");
+
+    const max = screen.getByRole("button", { name: "Max" }) as HTMLButtonElement;
+    expect(max.disabled).toBe(true);
+    expect(max.getAttribute("title")).toMatch(/does not cover the reserve/);
+  });
+
+  it("says so rather than showing a zero while the balance is still loading", () => {
+    wallet.account = { state: "loading" };
+    render(<AccountPage />);
+
+    expect(screen.getByText("Wallet: reading…")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Max" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("points an unfunded account at the faucet instead of offering a deposit", () => {
+    wallet.account = { state: "missing" };
+    render(<AccountPage />);
+
+    expect(screen.getByText("Wallet: not funded")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Max" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("disables Max while the wallet is on the wrong network", async () => {
+    wallet.networkMismatch = true;
+    render(<AccountPage />);
+    await screen.findByText("Wallet: 9999 XLM");
+
+    expect((screen.getByRole("button", { name: "Max" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 });

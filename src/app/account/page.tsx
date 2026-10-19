@@ -7,7 +7,14 @@ import { chainMandatesOf } from "@/lib/chain";
 import { config } from "@/lib/config";
 import { payflow } from "@/lib/payflow";
 import { useWallet } from "@/lib/wallet";
-import { formatPeriod, formatWhen, fromStroops, toStroops } from "@/lib/format";
+import {
+  formatPeriod,
+  formatWhen,
+  fromStroops,
+  maxDeposit,
+  spendableBalance,
+  toStroops,
+} from "@/lib/format";
 import { metaFor, useTokenMetas } from "@/lib/token";
 import {
   AddressLink,
@@ -21,7 +28,8 @@ import {
 } from "@/components/ui";
 
 export default function AccountPage() {
-  const { address, networkMismatch, refreshAccount, signXdr } = useWallet();
+  const { account: walletAccount, address, networkMismatch, refreshAccount, signXdr } =
+    useWallet();
   const [balance, setBalance] = useState<bigint | null>(null);
   const [mandates, setMandates] = useState<ApiMandate[] | null>(null);
   const [amount, setAmount] = useState("");
@@ -36,6 +44,43 @@ export default function AccountPage() {
     ...(mandates ?? []).map((m) => m.token ?? config.contracts.token),
   ]);
   const vaultMeta = metaFor(metas, config.contracts.token);
+
+  /**
+   * What a "Max" fill would put in the box, in stroops.
+   *
+   * This is the wallet's *native* balance: the fee has to come from it, and so
+   * does the amount being deposited. That is only the same thing as the vault's
+   * token if the vault holds the native asset, which is what the deployed suite
+   * does — its token contract reports `symbol() == "native"` and 7 decimals.
+   * A vault holding a separate SEP-41 token would need the token's own
+   * balance here instead.
+   */
+  const nativeMax =
+    walletAccount.state === "loaded"
+      ? maxDeposit(walletAccount.account.balance, walletAccount.account.subentryCount)
+      : 0n;
+  const nativeSpendable =
+    walletAccount.state === "loaded"
+      ? spendableBalance(walletAccount.account.balance, walletAccount.account.subentryCount)
+      : null;
+
+  /**
+   * The wallet's own native balance, next to the field it funds. It says
+   * nothing rather than "0" while loading, because a wrong zero reads as
+   * "you are broke".
+   */
+  const walletLabel = (() => {
+    switch (walletAccount.state) {
+      case "loaded":
+        return `Wallet: ${fromStroops(nativeSpendable ?? 0n)} XLM`;
+      case "missing":
+        return "Wallet: not funded";
+      case "error":
+        return "Wallet: balance unavailable";
+      default:
+        return "Wallet: reading…";
+    }
+  })();
 
   const load = useCallback(async () => {
     if (!address) return;
@@ -144,14 +189,35 @@ export default function AccountPage() {
             <label className="label" htmlFor="amount">
               Amount ({vaultMeta.symbol})
             </label>
-            <input
-              id="amount"
-              className="input"
-              inputMode="decimal"
-              placeholder="5.0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
+            <div className="flex gap-2">
+              <input
+                id="amount"
+                className="input"
+                inputMode="decimal"
+                placeholder="5.0"
+                value={amount}
+                aria-describedby="wallet-balance"
+                onChange={(e) => setAmount(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-ghost whitespace-nowrap"
+                disabled={busy !== null || networkMismatch || nativeMax <= 0n}
+                title={
+                  nativeMax > 0n
+                    ? `Fill ${fromStroops(nativeMax)} XLM: your balance less the minimum account balance and a 1 XLM reserve for the transaction fee`
+                    : "Nothing to deposit — your balance does not cover the reserve"
+                }
+                onClick={() => setAmount(fromStroops(nativeMax))}
+              >
+                Max
+              </button>
+            </div>
+            {/* Under the field rather than beside the label: at 375px the two
+                share one row and both wrap. */}
+            <p id="wallet-balance" className="mt-1 text-xs text-muted">
+              {walletLabel}
+            </p>
           </div>
           <button
             type="button"
