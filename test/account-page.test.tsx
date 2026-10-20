@@ -32,9 +32,11 @@ const wallet = vi.hoisted(() => ({
 }));
 
 const apiMock = vi.hoisted(() => ({
+  isConfigured: vi.fn(() => true),
   mandatesOf: vi.fn(),
   vaultHistory: vi.fn(),
   charges: vi.fn(),
+  stream: vi.fn(),
 }));
 
 const payflowMock = vi.hoisted(() => ({
@@ -62,13 +64,17 @@ const chainMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/wallet", () => ({ useWallet: () => wallet }));
-vi.mock("@/lib/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/api")>();
-  return {
-    api: { mandatesOf: apiMock.mandatesOf, vaultHistory: apiMock.vaultHistory, charges: apiMock.charges },
-    checkWebhookUrl: actual.checkWebhookUrl,
-  };
-});
+
+vi.mock("@/lib/api", () => ({
+  api: {
+    isConfigured: apiMock.isConfigured,
+    mandatesOf: apiMock.mandatesOf,
+    vaultHistory: apiMock.vaultHistory,
+    charges: apiMock.charges,
+    stream: apiMock.stream,
+  },
+  checkWebhookUrl: vi.fn(),
+}));
 vi.mock("@/lib/payflow", () => ({
   payflow: payflowMock,
   readContract: payflowMock.readContract,

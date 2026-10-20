@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { api, type ApiMandate, type ApiVaultEvent } from "@/lib/api";
+import { api, type ApiMandate, type ApiVaultEvent, type StreamEvent } from "@/lib/api";
 import { buildUpcomingChargesCalendar, CALENDAR_FILENAME } from "@/lib/calendar";
 import {
   buildPaymentsCsv,
@@ -35,6 +35,7 @@ import {
 import { mandateStatus } from "@/lib/payflow";
 import { createdAtDate, paymentDateRange, paymentRow, sortPaymentsNewestFirst } from "@/lib/payments";
 import { useWallet } from "@/lib/wallet";
+import { useStream } from "@/lib/stream";
 import {
   formatPeriod,
   formatWhen,
@@ -104,6 +105,10 @@ export default function AccountPage() {
   // The recipient awaiting a second-click confirmation — one at a time.
   const [fundFor, setFundFor] = useState<string | null>(null);
 
+  // Track who paused each mandate: "subscriber" | "merchant" | undefined
+  // Updated by the SSE stream when available.
+  const [pausedBy, setPausedBy] = useState<Map<number, "subscriber" | "merchant">>(new Map());
+
   // Read inside async callbacks to detect a wallet account switch mid-load:
   // the closure's `address` is the account the request started for, which may
   // no longer be the account whose page is on screen.
@@ -124,51 +129,7 @@ export default function AccountPage() {
   const fundAmountCheck = checkAmount(fundAmount, vaultMeta.decimals);
   const fundStroops = fundAmountCheck.ok ? fundAmountCheck.stroops : 0n;
 
-  // The vault holds the configured token; each mandate carries the token it
-  // was opened against, which the indexer does not report.
-  const metas = useTokenMetas([
-    config.contracts.token,
-    ...(mandates ?? []).map((m) => m.token ?? config.contracts.token),
-  ]);
-  const vaultMeta = metaFor(metas, config.contracts.token);
-
-  /**
-   * What a "Max" fill would put in the box, in stroops.
-   *
-   * This is the wallet's *native* balance: the fee has to come from it, and so
-   * does the amount being deposited. That is only the same thing as the vault's
-   * token if the vault holds the native asset, which is what the deployed suite
-   * does — its token contract reports `symbol() == "native"` and 7 decimals.
-   * A vault holding a separate SEP-41 token would need the token's own
-   * balance here instead.
-   */
-  const nativeMax =
-    walletAccount.state === "loaded"
-      ? maxDeposit(walletAccount.account.balance, walletAccount.account.subentryCount)
-      : 0n;
-  const nativeSpendable =
-    walletAccount.state === "loaded"
-      ? spendableBalance(walletAccount.account.balance, walletAccount.account.subentryCount)
-      : null;
-
-  /**
-   * The wallet's own native balance, next to the field it funds. It says
-   * nothing rather than "0" while loading, because a wrong zero reads as
-   * "you are broke".
-   */
-  const walletLabel = (() => {
-    switch (walletAccount.state) {
-      case "loaded":
-        return `Wallet: ${fromStroops(nativeSpendable ?? 0n)} XLM`;
-      case "missing":
-        return "Wallet: not funded";
-      case "error":
-        return "Wallet: balance unavailable";
-      default:
-        return "Wallet: reading…";
-    }
-  })();
-
+  // Load function defined early so it can be referenced by the SSE stream hook
   const load = useCallback(async () => {
     addressRef.current = address;
     if (!address) return;
@@ -213,6 +174,37 @@ export default function AccountPage() {
       setIndexerAvailable(false);
     }
   }, [address]);
+
+  // SSE stream for live updates (payflow-backend#19)
+  useStream({
+    address,
+    role: "subscriber",
+    onEvent: useCallback((event: StreamEvent) => {
+      if (event.type === "mandate_pause") {
+        setPausedBy((prev) => {
+          const next = new Map(prev);
+          next.set(event.mandate_id, event.by);
+          return next;
+        });
+      }
+      if (event.type === "mandate_status") {
+        setPausedBy((prev) => {
+          const next = new Map(prev);
+          // If status becomes Active, the pause is over
+          if (event.status === "Active") {
+            next.delete(event.mandate_id);
+          }
+          return next;
+        });
+      }
+      // For other events (charge, discount, end), trigger a reload
+      // to get fresh data from the indexer
+      if (event.type === "charge" || event.type === "mandate_discount" || event.type === "mandate_end") {
+        void load();
+      }
+    }, [load]),
+    enabled: api.isConfigured(),
+  });
 
   useEffect(() => {
     // A different account means every previous value belongs to someone else:
@@ -851,18 +843,164 @@ export default function AccountPage() {
           </Empty>
         ) : (
           <div className="space-y-3">
-            {mandates.map((m) => {
-              const terminal = m.status === "Cancelled" || m.status === "Completed";
-              const meta = metaFor(metas, m.token ?? config.contracts.token);
-              return (
-                <div key={m.id} className="rounded-lg border border-edge p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">Mandate #{m.id}</span>
-                        <Badge status={m.status} />
-                        {m.ended_by === "merchant" && (
-                          <span className="text-xs text-muted">ended by the merchant</span>
+            <div className="flex gap-2 mt-3">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy !== null || networkMismatch}
+                onClick={handleCancelAll}
+              >
+                {busy !== null || networkMismatch ? "Cancelling…" : "Cancel all"}
+              </button>
+            </div>
+{mandates.map((m) => {
+                const terminal = m.status === "Cancelled" || m.status === "Completed";
+                const meta = metaFor(metas, m.token ?? config.contracts.token);
+                const resumes = resumeDate(mandatePauseUntil(m));
+                const pastDueUntil = mandatePastDueUntil(m);
+                const isPastDue = mandateIsPastDue(m);
+                const trial = describeTrialEnd(m);
+                // What the next charge costs while the merchant's discount runs.
+                const discounted = nextChargeAmount(m);
+                const badge = discountBadge(m);
+                const remaining = remainingDiscountCharges(m);
+                // Both of these read from data the page already has, so the
+                // timeline works in contract-only mode: the mandates may come
+                // from chain state and the balance from a vault read.
+                const schedule = buildChargeSchedule(m);
+                const nextAmount = schedule.charges[0]?.amount;
+                // `balance` is the configured token's vault balance. A mandate
+                // denominated in another token cannot be compared against it, so
+                // leave the warning out rather than reporting a false shortfall.
+                const sameToken =
+                  (m.token ?? config.contracts.token) === config.contracts.token;
+                const shortfall =
+                  nextAmount === undefined || !sameToken
+                    ? null
+                    : chargeShortfall(balance, nextAmount);
+                // Past-due shortfall is the same as the next charge shortfall.
+                const pastDueShortfall = isPastDue && sameToken && nextAmount !== undefined
+                  ? chargeShortfall(balance, nextAmount)
+                  : null;
+                return (
+                  <div key={m.id} className="rounded-lg border border-edge p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">Mandate #{m.id}</span>
+                          <Badge status={m.status} />
+                          {isPastDue && (
+                            <span className="rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
+                              Past due
+                            </span>
+                          )}
+                          {resumes && (
+                            <span className="text-xs text-muted">resumes {resumes}</span>
+                          )}
+                          {pastDueUntil && (
+                            <span className="text-xs text-muted">grace period ends {formatDate(pastDueUntil)}</span>
+                          )}
+                          {trial && (
+                            <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
+                              Free trial
+                            </span>
+                          )}
+                          {badge && (
+                            <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
+                              {badge}
+                            </span>
+                          )}
+                          {m.ended_by === "merchant" && (
+                            <span className="text-xs text-muted">ended by the merchant</span>
+                          )}
+                          {m.status === "Paused" && pausedBy.get(m.id) === "merchant" && (
+                            <span className="text-xs text-muted">paused by the merchant</span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-sm text-muted">
+                          {discounted !== null ? (
+                            <>
+                              <span className="font-medium text-fg">
+                                {fromStroops(discounted, 4, meta.decimals)} {meta.symbol}
+                              </span>{" "}
+                              <span className="text-xs line-through">
+                                {fromStroops(m.amount, 4, meta.decimals)} {meta.symbol}
+                              </span>{" "}
+                            </>
+                          ) : (
+                            <>
+                              {fromStroops(m.amount, 4, meta.decimals)} {meta.symbol}{" "}
+                            </>
+                          )}
+                          {formatPeriod(m.period)} · to <MerchantAccount value={m.merchant} />
+                        </div>
+                        {badge && (
+                          <div className="mt-1 text-xs text-accent">
+                            {discounted !== null ? (
+                              <>
+                                You pay {fromStroops(discounted, 4, meta.decimals)}{" "}
+                                {meta.symbol} for the next charge
+                                {remaining === null
+                                  ? "."
+                                  : remaining === 1
+                                    ? ", then the full price."
+                                    : `, then the full price. ${remaining} discounted charges left.`}
+                              </>
+                            ) : remaining === 0 ? (
+                              <>The discount has run out — you pay the full price now.</>
+                            ) : (
+                              <>The merchant set a discount on this subscription.</>
+                            )}
+                          </div>
+                        )}
+                        <div className="mt-1 text-xs text-muted">
+                          {m.charges_made} charge{m.charges_made === 1 ? "" : "s"} taken
+                          {m.max_charges > 0 && ` of ${m.max_charges}`}
+                          {" · next "}
+                          {m.status === "Active" ? <TimeAgo value={m.next_charge} /> : "—"}
+                        </div>
+                        {trial && (
+                          <div className="mt-1 text-xs text-accent">
+                            {trial}. Cancel before then and you pay nothing.
+                          </div>
+                        )}
+                        {isPastDue && pastDueShortfall !== null && (
+                          <Notice tone="error">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="font-medium">
+                                  This subscription is past due — your vault is short by{" "}
+                                  {formatAmount(pastDueShortfall, meta)} for the next charge.
+                                </p>
+                                {pastDueUntil && (
+                                  <p className="mt-1 text-xs text-muted">
+                                    The grace period ends {formatDate(pastDueUntil)}. After that, the
+                                    mandate may expire if the charge cannot be settled.
+                                  </p>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn-primary whitespace-nowrap"
+                                disabled={busy !== null || networkMismatch}
+                                onClick={() =>
+                                  void run(`deposit-past-due-${m.id}`, () =>
+                                    payflow.deposit(
+                                      address,
+                                      signXdr,
+                                      config.contracts.token,
+                                      parseAmount(
+                                        fromStroops(pastDueShortfall + 1n, 4, meta.decimals),
+                                        meta.decimals,
+                                      ),
+                                    ),
+                                  )
+                                }
+                              >
+                                {busy === `deposit-past-due-${m.id}` ? "Depositing…" : "Deposit to fix"}
+                              </button>
+                            </div>
+                          </Notice>
                         )}
                       </div>
                       <div className="mt-1 text-sm text-muted">
@@ -879,23 +1017,45 @@ export default function AccountPage() {
 
                     {!terminal && (
                       <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          className="btn-ghost"
-                          disabled={busy !== null || networkMismatch}
-                          onClick={() =>
-                            void run(`pause-${m.id}`, () =>
-                              payflow.setPaused(
-                                address,
-                                signXdr,
-                                m.id,
-                                m.status === "Active",
-                              ),
-                            )
-                          }
-                        >
-                          {m.status === "Active" ? "Pause" : "Resume"}
-                        </button>
+                        {/* Subscriber can pause, but cannot resume if paused by merchant */}
+                        {m.status === "Active" && (
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={busy !== null || networkMismatch}
+                            onClick={() =>
+                              void run(`pause-${m.id}`, () =>
+                                payflow.setPaused(
+                                  address,
+                                  signXdr,
+                                  m.id,
+                                  true,
+                                ),
+                              )
+                            }
+                          >
+                            Pause
+                          </button>
+                        )}
+                        {m.status === "Paused" && pausedBy.get(m.id) !== "merchant" && (
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={busy !== null || networkMismatch}
+                            onClick={() =>
+                              void run(`pause-${m.id}`, () =>
+                                payflow.setPaused(
+                                  address,
+                                  signXdr,
+                                  m.id,
+                                  false,
+                                ),
+                              )
+                            }
+                          >
+                            Resume
+                          </button>
+                        )}
                         {/* Offered only against a contract that carries
                             pause_until; see `pauseSupported`. */}
                         {pauseSupported &&
