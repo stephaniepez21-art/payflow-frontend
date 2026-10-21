@@ -34,9 +34,6 @@ export default function SubscribePage() {
   // Each plan can name a different token, so the cards read their own.
   const metas = useTokenMetas((plans ?? []).map((p) => p.token));
 
-  // Each plan can name a different token, so the cards read their own.
-  const metas = useTokenMetas((plans ?? []).map((p) => p.token));
-
   const load = useCallback(async () => {
     const generation = ++request.current;
     const res = await api.plans();

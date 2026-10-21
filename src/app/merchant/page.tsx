@@ -32,7 +32,8 @@ import {
   type TokenMeta,
 } from "@/lib/format";
 import { metaFor, useTokenMetas } from "@/lib/token";
-import { AddressLink, Badge, Empty, Notice, Panel, SkeletonRows, Stat, TxLink } from "@/components/ui";
+import { AddressLink, Badge, Empty, Notice, Panel, SkeletonRows, Stat, TimeAgo, TxLink } from "@/components/ui";
+import { CopyButton } from "@/components/CopyButton";
 
 const PERIOD_OPTIONS = [
   { label: "Every minute (demo)", value: 60 },
@@ -747,14 +748,6 @@ export default function MerchantPage() {
   const showPriceError = priceError !== null && (priceTouched || price.trim() !== "");
   const split = priceCheck.ok ? feeSplit(priceCheck.stroops, feeBps ?? 0) : null;
   const trialSupported = (plans ?? []).some(supportsTrials);
-
-  // Plans are published in the configured token; mandates carry their own.
-  const metas = useTokenMetas([
-    config.contracts.token,
-    ...(plans ?? []).map((p) => p.token),
-    ...(mandates ?? []).map((m) => m.token ?? config.contracts.token),
-  ]);
-  const tokenMeta = metaFor(metas, config.contracts.token);
 
   const load = useCallback(async () => {
     if (!address) return;
