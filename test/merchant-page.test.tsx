@@ -113,7 +113,7 @@ describe("MerchantPage publish form", () => {
     expect(
       (screen.getByRole("button", { name: /publish plan/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    expect(screen.getByText(/Enter a positive number/i)).toBeTruthy();
+    expect(screen.getByTestId("price-error").textContent).toMatch(/Enter a positive number/i);
   });
 
   it("explains the empty field once the merchant has blurred it", async () => {
@@ -121,7 +121,7 @@ describe("MerchantPage publish form", () => {
     const field = (await screen.findByLabelText(/price/i)) as HTMLInputElement;
     fireEvent.blur(field);
 
-    expect(screen.getByText("Enter an amount.")).toBeTruthy();
+    expect(screen.getByTestId("price-error").textContent).toBe("Enter an amount.");
   });
 
   it("rejects more decimal places than the token can represent", async () => {
@@ -129,7 +129,7 @@ describe("MerchantPage publish form", () => {
 
     const publish = await fillPrice("1.00000001");
     expect(publish.disabled).toBe(true);
-    expect(screen.getByText(/At most 7 decimal places\./i)).toBeTruthy();
+    expect(screen.getByTestId("price-error").textContent).toMatch(/At most 7 decimal places\./i);
   });
 
   it("accepts the separators the merchant's locale uses", async () => {
@@ -152,7 +152,8 @@ describe("MerchantPage publish form", () => {
 
     const publish = await fillPrice("0");
     expect(publish.disabled).toBe(true);
-    expect(screen.getByText("Amount must be greater than zero.")).toBeTruthy();
+    // The error appears in two places (price-error and price-preview), check the price-error specifically
+    expect(screen.getByTestId("price-error").textContent).toBe("Amount must be greater than zero.");
     expect(payflowMock.createPlan).not.toHaveBeenCalled();
   });
 

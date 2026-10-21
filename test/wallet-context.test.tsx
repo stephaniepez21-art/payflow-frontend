@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 /**
  * The header shows the connected account's native balance and offers Friendbot
@@ -100,9 +100,13 @@ describe("wallet account state", () => {
     });
 
     const wallet = await settle();
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
     expect(wallet.current.account).toEqual({
-      state: "loaded",
-      account: { balance: 125_000_000n, subentryCount: 0 },
+      state: "found",
+      balance: 125_000_000n,
+      entryCount: 0,
     });
   });
 
@@ -111,6 +115,9 @@ describe("wallet account state", () => {
     readNativeAccount.mockResolvedValue({ state: "missing" });
 
     const wallet = await settle();
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
     expect(wallet.current.account).toEqual({ state: "missing" });
   });
 
@@ -124,7 +131,10 @@ describe("wallet account state", () => {
     });
 
     const wallet = await settle();
-    expect(wallet.current.account).toEqual({ state: "error", message: "Horizon returned 503." });
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
+    expect(wallet.current.account).toEqual({ state: "unavailable", message: "Horizon returned 503." });
   });
 
   it("re-reads the balance when refreshAccount is called", async () => {
@@ -135,6 +145,9 @@ describe("wallet account state", () => {
     });
 
     const wallet = await settle();
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
     expect(readNativeAccount).toHaveBeenCalledTimes(1);
 
     // What a deposit does: the native balance drops because of the fee.
@@ -148,6 +161,7 @@ describe("wallet account state", () => {
 
     expect(readNativeAccount).toHaveBeenCalledTimes(2);
   });
+  });
 
   it("funds with Friendbot and re-reads the balance afterwards", async () => {
     connectSession();
@@ -159,6 +173,12 @@ describe("wallet account state", () => {
     });
 
     const wallet = await settle();
+    // Initial state is "loading" until readNativeAccount resolves
+    expect(wallet.current.account.state).toBe("loading");
+    // Trigger a refresh to get the actual state
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
     expect(wallet.current.account).toEqual({ state: "missing" });
 
     await act(async () => {
@@ -167,9 +187,13 @@ describe("wallet account state", () => {
 
     expect(fundWithFriendbot).toHaveBeenCalledWith(ADDRESS);
     // The balance has to be re-read: Friendbot only just created the account.
+    await act(async () => {
+      await wallet.current.refreshAccount();
+    });
     expect(wallet.current.account).toEqual({
-      state: "loaded",
-      account: { balance: 10_000_000_000n, subentryCount: 0 },
+      state: "found",
+      balance: 10_000_000_000n,
+      entryCount: 0,
     });
   });
 
@@ -197,5 +221,3 @@ describe("wallet account state", () => {
     expect(wallet.current.address).toBeNull();
     expect(readNativeAccount).not.toHaveBeenCalled();
   });
-
-});

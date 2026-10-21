@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { fundWithFriendbot, readNativeAccount } from "./account";
+import { fundWithFriendbot, readNativeAccount, type NativeAccount, type NativeAccountResult } from "./account";
 import { config } from "./config";
 import type { SignXdr } from "./payflow";
 import { translateSignatureError } from "./signature-error";
@@ -66,6 +66,12 @@ export function shouldUpdateAddress(
   if (!currentAddress || !detectedAddress) return false;
   return currentAddress !== detectedAddress;
 }
+
+export type AccountState =
+  | { state: "loading" }
+  | { state: "found"; balance: bigint; entryCount: number }
+  | { state: "missing" }
+  | { state: "unavailable"; message: string };
 
 export interface WalletState {
   address: string | null;
@@ -208,6 +214,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // Wallet may not support getNetwork; treat as no mismatch
         setWalletNetwork(null);
       }
+      // Read the native balance for the restored account
+      void refreshAccount();
     });
   }, []);
 
@@ -259,6 +267,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
               STORAGE_KEY,
               serializeSession(option.id, selected),
             );
+            void refreshAccount();
           } catch (err) {
             setError(err instanceof Error ? err.message : "Could not read address");
             setWalletNetwork(null);
@@ -289,12 +298,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const refreshAccount = useCallback(async () => {
     if (!address) return;
-    const kit = await getKit();
     try {
-      const native = await readNativeAccount(kit, address, config.horizonUrl);
-      setAccount({ state: "loaded", balance: native.balance, entryCount: native.entryCount });
+      const result = await readNativeAccount(address);
+      if (result.state === "found") {
+        setAccount({ state: "found", balance: result.account.balance, entryCount: result.account.subentryCount });
+      } else if (result.state === "missing") {
+        setAccount({ state: "missing" });
+      } else {
+        setAccount({ state: "unavailable", message: result.message });
+      }
     } catch {
-      setAccount({ state: "error", message: "Failed to load account" });
+      setAccount({ state: "unavailable", message: "Failed to load account" });
     }
   }, [address]);
 

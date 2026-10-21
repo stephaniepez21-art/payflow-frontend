@@ -58,30 +58,25 @@ import { createdAtDate, paymentDateRange, paymentRow, sortPaymentsNewestFirst } 
 import { useWallet } from "@/lib/wallet";
 import { useStream } from "@/lib/stream";
 import {
-  formatPeriod,
-  formatWhen,
-  fromStroops,
-  maxDeposit,
-  spendableBalance,
-  toStroops,
-} from "@/lib/format";
-import { metaFor, useTokenMetas } from "@/lib/token";
-import {
   checkAmount,
   formatAmount,
   formatDate,
   formatPeriod,
+  formatWhen,
   fromStroops,
+  maxDeposit,
   minPauseDate,
   parseAmount,
   parsePauseDate,
   resumeDate,
   shortAddress,
+  spendableBalance,
+  toStroops,
 } from "@/lib/format";
+import { loadTokenMeta, metaFor, useTokenMetas } from "@/lib/token";
 import { buildChargeSchedule, chargeShortfall } from "@/lib/schedule";
 import { computeVaultRunway } from "@/lib/runway";
 import { describeTrialEnd } from "@/lib/trial";
-import { loadTokenMeta, metaFor, useTokenMetas } from "@/lib/token";
 import { VirtualList } from "@/components/VirtualList";
 import { AmountInput } from "@/components/AmountInput";
 import {
@@ -104,7 +99,7 @@ function AccountInner() {
       ? paramAddress.trim()
       : null;
 
-  const { address, networkMismatch, signXdr, connect, connecting } = useWallet();
+  const { address, networkMismatch, signXdr, connect, connecting, refreshAccount } = useWallet();
 
   // The account whose data is displayed on screen
   const viewAddress = targetAddress ?? address;
@@ -1191,19 +1186,8 @@ function AccountInner() {
                           </Notice>
                         )}
                       </div>
-                      <div className="mt-1 text-sm text-muted">
-                        {fromStroops(m.amount, 4, meta.decimals)} {meta.symbol}{" "}
-                        {formatPeriod(m.period)} · to <AddressLink value={m.merchant} />
-                      </div>
-                      <div className="mt-1 text-xs text-muted">
-                        {m.charges_made} charge{m.charges_made === 1 ? "" : "s"} taken
-                        {m.max_charges > 0 && ` of ${m.max_charges}`}
-                        {" · next "}
-                        {m.status === "Active" ? formatWhen(m.next_charge) : "—"}
-                      </div>
-                    </div>
 
-                    {!terminal && !isReadOnly && (
+                      {!terminal && !isReadOnly && (
                       <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-edge">
                         {/* Subscriber can pause, but cannot resume if paused by merchant */}
                         {m.status === "Active" && (
@@ -1390,7 +1374,7 @@ function AccountInner() {
                 );
               }}
             />
-          </div>
+</div>
         )}
       </Panel>
     </div>

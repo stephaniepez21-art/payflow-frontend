@@ -51,6 +51,9 @@ export const CONFIGURED_TOKENS: readonly ConfiguredToken[] = [
   USDC_TESTNET_TOKEN,
 ];
 
+const networkName = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "TESTNET";
+const isTestnetNetwork = networkName.toUpperCase() === "TESTNET";
+
 export const config = {
   rpcUrl:
     process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",

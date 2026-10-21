@@ -86,7 +86,7 @@ function BalanceLabel({
       </span>
     );
   }
-  if (account.state === "error") {
+  if (account.state === "unavailable") {
     return (
       <span className="text-xs text-amber-300" title={account.message}>
         Balance unavailable
@@ -103,15 +103,15 @@ function BalanceLabel({
     );
   }
 
-  const { balance, subentryCount } = account.account;
-  const spendable = spendableBalance(balance, subentryCount);
+  const { balance, entryCount } = account;
+  const spendable = spendableBalance(balance, entryCount);
   return (
     <span
       className="whitespace-nowrap text-xs text-muted tabular-nums"
       // Announced so a screen-reader user hears the balance change after a
       // transaction without having to go looking for it.
       aria-live="polite"
-      title={`${fromStroops(balance)} XLM held, ${fromStroops(spendable)} XLM spendable after the ${subentryCount} ledger ${subentryCount === 1 ? "entry" : "entries"} this account keeps`}
+      title={`${fromStroops(balance)} XLM held, ${fromStroops(spendable)} XLM spendable after the ${entryCount} ledger ${entryCount === 1 ? "entry" : "entries"} this account keeps`}
     >
       {/* Two places in the header is a summary, not an invoice; the full
           precision is in the tooltip and on the account page. */}

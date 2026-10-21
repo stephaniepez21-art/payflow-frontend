@@ -58,7 +58,6 @@ import { formatUsdEstimate, formatUsdcEstimate, useXlmUsdPrice } from "@/lib/pri
 import { AmountInput } from "@/components/AmountInput";
 import { CopyButton } from "@/components/CopyButton";
 import { AddressLink, Badge, Empty, Notice, Panel, SkeletonRows, Stat, TimeAgo, TxLink } from "@/components/ui";
-import { CopyButton } from "@/components/CopyButton";
 
 const PERIOD_OPTIONS = [
   { label: "Every minute (demo)", value: 60 },
@@ -759,22 +758,13 @@ export default function MerchantPage() {
   // Updated by the SSE stream when available.
   const [pausedBy, setPausedBy] = useState<Map<number, "subscriber" | "merchant">>(new Map());
 
-  const tokens: readonly ConfiguredToken[] =
-    (config as unknown as { tokens?: ConfiguredToken[] }).tokens ?? DEFAULT_TOKENS;
-
-  const [selectedToken, setSelectedToken] = useState(
-    config.contracts.token || tokens[0]?.id || "",
-  );
-
-  // Plans can be published in any configured token; mandates carry their own.
+  // Plans are published in the configured token; mandates carry their own.
   const metas = useTokenMetas([
     config.contracts.token,
-    selectedToken,
-    ...tokens.map((t) => t.id),
     ...(plans ?? []).map((p) => p.token),
     ...(mandates ?? []).map((m) => m.token ?? config.contracts.token),
   ]);
-  const tokenMeta = metaFor(metas, selectedToken);
+  const tokenMeta = metaFor(metas, config.contracts.token);
 
   // The contract rejects a name over MAX_NAME_LEN bytes, so catch it here
   // rather than letting the user pay for a transaction that will fail.
@@ -1240,46 +1230,29 @@ export default function MerchantPage() {
         subtitle="Price and period are frozen into every mandate opened against this plan. To change them, publish a new plan."
       >
         <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[8rem] flex-1">
-            <label className="label" htmlFor="plan-token">
-              Token
-            </label>
-            <select
-              id="plan-token"
-              className="input"
-              value={selectedToken}
-              onChange={(e) => setSelectedToken(e.target.value)}
-              disabled={busy !== null}
-            >
-              {tokens.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.symbol} — {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
           <div className="min-w-[10rem] flex-1">
             <label className="label" htmlFor="price">
               Price ({tokenMeta.symbol})
             </label>
             <input
               id="price"
-              label={`Price (${tokenMeta.symbol})`}
               value={price}
-              onChange={(next) => {
-                setPrice(next);
+              onChange={(e) => {
+                setPrice(e.currentTarget.value);
                 setPriceTouched(true);
               }}
               onBlur={() => setPriceTouched(true)}
-              decimals={tokenMeta.decimals}
               placeholder="1.0"
               disabled={busy !== null}
-              // The form renders the price message in the fee-preview slot
-              // below, so the field must not repeat it inline.
-              hideError
-              describedBy="price-preview"
+              aria-invalid={showPriceError}
+              aria-describedby={showPriceError ? "price-error" : "price-preview"}
             />
           </div>
+          {showPriceError && (
+            <p id="price-error" data-testid="price-error" className="mt-1 text-sm text-danger" aria-live="polite">
+              {priceError}
+            </p>
+          )}
           <div className="min-w-[12rem] flex-1">
             <label className="label" htmlFor="plan-name">
               Plan name
@@ -1345,11 +1318,11 @@ export default function MerchantPage() {
               // the field again: a half-typed "1." passes `checkAmount` but
               // `toStroops` rejects, so re-parsing here would throw on a
               // click the form had just said was fine.
-              if (!priceCheck.ok) return;
-              void run("create", () =>
-                payflow.createPlan(address, signXdr, {
-                  token: selectedToken,
-                  amount: priceCheck.stroops,
+if (!priceCheck.ok) return;
+            void run("create", () =>
+              payflow.createPlan(address, signXdr, {
+                token: config.contracts.token,
+                amount: priceCheck.stroops,
                   period,
                   name: name.trim(),
                   // Omitted, not zeroed, when unsupported: the deployed

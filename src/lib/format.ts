@@ -80,6 +80,72 @@ export function formatAmount(
 }
 
 /**
+ * The network's base reserve: 0.5 XLM, in stroops. Each ledger entry an account
+ * holds costs this much, which is what stops an account from being emptied to
+ * zero by its own fees.
+ */
+export const BASE_RESERVE = 5_000_000n;
+
+/**
+ * The balance an account may not go below.
+ *
+ * The network requires `(2 + subentries) * baseReserve`: two entries for the
+ * account itself, then one per trustline, offer, data or contract entry. Below
+ * this the account is deleted and, with it, every mandate it holds.
+ */
+export function minAccountBalance(
+  subentryCount: number,
+  baseReserve: bigint = BASE_RESERVE,
+): bigint {
+  const entries = Number.isFinite(subentryCount) ? Math.max(0, Math.trunc(subentryCount)) : 0;
+  return BigInt(entries + 2) * baseReserve;
+}
+
+/**
+ * What is actually spendable: the balance less the minimum the account must
+ * keep. Never negative — a balance already below the minimum means the account
+ * cannot pay for anything, not that it has a debt.
+ */
+export function spendableBalance(
+  balance: bigint,
+  subentryCount: number,
+  baseReserve: bigint = BASE_RESERVE,
+): bigint {
+  const spendable = balance - minAccountBalance(subentryCount, baseReserve);
+  return spendable > 0n ? spendable : 0n;
+}
+
+/**
+ * Headroom a "Max" fill leaves behind, on top of the minimum account balance.
+ *
+ * A deposit is one Soroban write paid for out of the same balance it is
+ * drawn from. The base fee is 100 stroops, but the rent the network charges
+ * for the ledger entries the write creates is the larger part, and that rent
+ * is set by the ledger, not by us. 1 XLM is a deliberate over-estimate of both:
+ * under-filling Max costs the user a fraction of an XLM, whereas over-filling
+ * it can drop the account below its minimum balance — which the network
+ * refuses, and which takes every mandate on the account with it.
+ */
+export const FEE_RESERVE = 10_000_000n;
+
+/**
+ * The most that can be deposited in one transaction without endangering the
+ * account: its spendable balance less the fee reserve.
+ *
+ * Returns 0 rather than a negative bigint when the balance is too small to
+ * cover the reserve, so callers can disable the button instead of rendering an
+ * amount the contract would reject.
+ */
+export function maxDeposit(
+  balance: bigint,
+  subentryCount: number,
+  feeReserve: bigint = FEE_RESERVE,
+): bigint {
+  const usable = spendableBalance(balance, subentryCount) - feeReserve;
+  return usable > 0n ? usable : 0n;
+}
+
+/**
  * What a form should say about the amount a merchant typed.
  *
  * `toStroops` throws, which is the right behaviour for a transaction path and
